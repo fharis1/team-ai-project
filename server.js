@@ -7,63 +7,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 🔒 ENV variables
+// 🔒 ENV VARIABLES
 const API_KEY = process.env.API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 
-// ======================
-// 🚀 MONGODB CONNECTION
-// ======================
-mongoose.connect(MONGO_URI)
+// =======================
+// 🗄️ MongoDB Setup
+// =======================
+mongoose
+  .connect(MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
-  .catch(err => console.log("❌ MongoDB error:", err));
+  .catch((err) => console.log("❌ MongoDB error:", err));
 
-// ======================
-// 🧠 USER MODEL
-// ======================
-const User = mongoose.model("User", {
+// Schema
+const userSchema = new mongoose.Schema({
   name: String,
   skills: [String],
 });
 
-// ======================
-// 📥 ADD USER (SAVE TO DB)
-// ======================
-app.post("/add-user", async (req, res) => {
-  try {
-    const { name, skills } = req.body;
+const User = mongoose.model("User", userSchema);
 
-    const newUser = new User({
-      name,
-      skills,
-    });
-
-    await newUser.save();
-    res.send("✅ User saved");
-
-  } catch (err) {
-    res.status(500).send("❌ Error saving user");
-  }
-});
-
-// ======================
-// 📤 GET USERS (FROM DB)
-// ======================
-app.get("/users", async (req, res) => {
-  try {
-    const users = await User.find();
-    res.json(users);
-
-  } catch (err) {
-    res.status(500).send("❌ Error fetching users");
-  }
-});
-
-// ======================
-// 🧠 LOGIC: BEST TEAM
-// ======================
+// =======================
+// 🧠 Algorithm (CORE LOGIC)
+// =======================
 function findBestTeam(users) {
-  if (users.length < 2) return [];
+  if (users.length < 2) return users;
 
   let bestTeam = [];
   let bestScore = 0;
@@ -74,7 +42,7 @@ function findBestTeam(users) {
         const team = [users[i], users[j], users[k]];
 
         const uniqueSkills = new Set(
-          team.flatMap(u => u.skills.map(s => s.toLowerCase()))
+          team.flatMap((u) => u.skills.map((s) => s.toLowerCase()))
         );
 
         const score = uniqueSkills.size;
@@ -90,17 +58,46 @@ function findBestTeam(users) {
   return bestTeam;
 }
 
-// ======================
+// =======================
+// 👥 API ROUTES
+// =======================
+
+// ➕ Add user
+app.post("/add-user", async (req, res) => {
+  try {
+    const { name, skills } = req.body;
+
+    const newUser = new User({
+      name,
+      skills: skills.map((s) => s.toLowerCase()),
+    });
+
+    await newUser.save();
+
+    const users = await User.find();
+    res.json(users);
+  } catch (err) {
+    res.status(500).send("Error saving user");
+  }
+});
+
+// 📥 Get all users
+app.get("/users", async (req, res) => {
+  const users = await User.find();
+  res.json(users);
+});
+
+// =======================
 // 🤖 AI ROUTE
-// ======================
+// =======================
 app.post("/ai", async (req, res) => {
   try {
-    // 🔥 Get users from DB (NOT frontend anymore)
     const users = await User.find();
-    const project = req.body.project || "General project";
 
+    // 🔥 Algorithm decides team
     const bestTeam = findBestTeam(users);
 
+    // 🔥 AI explains ONLY (controlled)
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
@@ -108,28 +105,34 @@ app.post("/ai", async (req, res) => {
         messages: [
           {
             role: "system",
-            content: "You are a smart AI that explains team selection clearly.",
+            content:
+              "You are a strict AI that only explains based on given data. No extra info.",
           },
           {
             role: "user",
             content: `
-Users: ${JSON.stringify(users)}
+Users:
+${JSON.stringify(users)}
 
-Project:
-${project}
+Selected team:
+${bestTeam.map((u) => u.name).join(", ")}
 
-Best Team:
-${bestTeam.map(u => u.name).join(", ")}
+STRICT RULES:
+- DO NOT create new names
+- DO NOT assign roles
+- ONLY use given users
+- ONLY explain based on skills
+- MAX 2 lines
 
-Explain briefly.
+FORMAT:
 
-Format:
-🤖 Best Team: names
-💡 Reason: explanation
+🤖 Best Team: ${bestTeam.map((u) => u.name).join(", ")}
+
+💡 Reason: Short explanation based on skill coverage
 `,
           },
         ],
-        temperature: 0.7,
+        temperature: 0.3,
       },
       {
         headers: {
@@ -140,23 +143,28 @@ Format:
     );
 
     const result = response.data.choices[0].message.content;
-
     res.send(result);
 
   } catch (err) {
-    console.log("❌ AI Error:", err.response?.data || err.message);
+    console.log("AI ERROR:", err.response?.data || err.message);
 
-    // fallback
+    // fallback (still correct)
+    const users = await User.find();
+    const bestTeam = findBestTeam(users);
+
     res.send(`
-🤖 Best Team: Select based on skill diversity
-💡 Reason: Balanced frontend + backend + versatility
+🤖 Best Team: ${bestTeam.map((u) => u.name).join(", ")}
+
+💡 Reason: Selected based on maximum unique skill coverage.
 `);
   }
 });
 
-// ======================
+// =======================
 // 🚀 START SERVER
-// ======================
-app.listen(5000, () => {
-  console.log("🔥 Server running on http://localhost:5000");
+// =======================
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`🔥 Server running on port ${PORT}`);
 });
